@@ -36,8 +36,38 @@ ScaffoldingReadMe.txt
 # NuGet Symbol Packages
 *.snupkg
 
-# dotenv environment variables file
+# Secrets and local configuration overrides (use user-secrets or env vars instead)
 .env
+.env.*
+appsettings.Development.json
+appsettings.Local.json
+appsettings.*.local.json
+secrets.json
+*.pfx
+*.pem
+*.key
+
+# IDE and editor
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+*.userprefs
+*.sln.iml
+.claude/settings.local.json
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Test results and coverage
+*.trx
+coverage*.json
+coverage*.xml
+*.cobertura.xml
+*.opencover.xml
 
 # Others
 ~$*

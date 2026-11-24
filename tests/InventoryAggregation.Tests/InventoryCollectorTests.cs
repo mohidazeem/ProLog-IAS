@@ -18,8 +18,9 @@ public class InventoryCollectorTests
         ["wrong page size"] = p => p with { PageSize = 20 },
         ["short page"] = p => p with { Records = p.Records.Take(1).ToList() },
         ["empty page"] = p => p with { Records = [] },
-        ["id repeated from earlier page"] = p => p with { Records = [Dataset[0], .. p.Records.Skip(1)] },
-        ["id repeated within page"] = p => p with { Records = [p.Records[0], p.Records[0], p.Records[2]] },
+        ["id from earlier page with different content"] = p => p with { Records = [Dataset[0] with { Price = 999m }, .. p.Records] },
+        ["id repeated within page with different content"] = p => p with { Records = [.. p.Records, p.Records[0] with { Quantity = 99 }] },
+        ["exact repeat replacing a new record"] = p => p with { Records = [p.Records[0], p.Records[0], p.Records[2]] },
         ["totals changed between pages"] = p => p with { TotalRecords = 6, TotalPages = 2 },
         ["totalPages inconsistent with totalRecords"] = p => p with { TotalPages = 5 },
         ["negative quantity"] = p => p with { Records = [p.Records[0] with { Quantity = -1 }, .. p.Records.Skip(1)] },
@@ -40,7 +41,41 @@ public class InventoryCollectorTests
 
         Assert.Equal(Dataset, records);
         Assert.Equal(1, source.AttemptsFor(3));
-        Assert.Equal(0, source.AttemptsFor(4));
+        Assert.Equal(1, source.AttemptsFor(4));
+        Assert.Equal(0, source.AttemptsFor(5));
+    }
+
+    [Fact]
+    public async Task CollectAsync_PagesRepeatPreviousPagesLastRecord_DropsTheExactRepeat()
+    {
+        var source = new FakePageSource((page, _) =>
+        {
+            var valid = TestData.Page(Dataset, page, PageSize);
+            if (page == 1)
+                return valid;
+
+            var previousPageLast = Dataset[Math.Min((page - 1) * PageSize, Dataset.Count) - 1];
+            return valid with { Records = [previousPageLast, .. valid.Records] };
+        });
+
+        var records = await CreateCollector(source).CollectAsync(CancellationToken.None);
+
+        Assert.Equal(Dataset, records);
+        Assert.Equal(1, source.AttemptsFor(2));
+    }
+
+    [Fact]
+    public async Task CollectAsync_RecordsBeyondReportedLastPage_AreRejected()
+    {
+        var source = new FakePageSource((page, _) =>
+        {
+            var valid = TestData.Page(Dataset, page, PageSize);
+            return page == 4 ? valid with { Records = [TestData.Record(99)] } : valid;
+        });
+
+        await Assert.ThrowsAsync<InventoryDataException>(
+            () => CreateCollector(source).CollectAsync(CancellationToken.None));
+        Assert.Equal(MaxPageAttempts, source.AttemptsFor(4));
     }
 
     [Fact]

@@ -5,8 +5,9 @@ using Microsoft.Extensions.Options;
 namespace InventoryAggregation.Core;
 
 /// <summary>
-/// Reads every page from the source and accepts a page only if it is consistent with the first page
-/// and with everything collected so far. A page that fails validation is requested again.
+/// Reads every page from the source, plus one page past the reported end to prove nothing is left.
+/// A page is accepted only if it is consistent with the first page and with everything collected so far;
+/// exact repeats of already-collected records are tolerated and dropped, a page that fails validation is requested again.
 /// </summary>
 public sealed class InventoryCollector(
     IInventoryPageSource source,
@@ -17,25 +18,20 @@ public sealed class InventoryCollector(
 
     public async Task<IReadOnlyList<InventoryRecord>> CollectAsync(CancellationToken cancellationToken)
     {
-        var seenIds = new HashSet<int>();
+        var collected = new Dictionary<int, InventoryRecord>();
 
-        var first = await FetchValidPageAsync(1, reference: null, seenIds, cancellationToken);
-        var records = new List<InventoryRecord>(first.TotalRecords);
-        records.AddRange(first.Records);
+        var first = await FetchValidPageAsync(1, reference: null, collected, cancellationToken);
 
-        for (var pageNumber = 2; pageNumber <= first.TotalPages; pageNumber++)
-        {
-            var page = await FetchValidPageAsync(pageNumber, first, seenIds, cancellationToken);
-            records.AddRange(page.Records);
-        }
+        for (var pageNumber = 2; pageNumber <= first.TotalPages + 1; pageNumber++)
+            await FetchValidPageAsync(pageNumber, first, collected, cancellationToken);
 
-        return records;
+        return [.. collected.Values];
     }
 
     private async Task<InventoryPage> FetchValidPageAsync(
         int pageNumber,
         InventoryPage? reference,
-        HashSet<int> seenIds,
+        Dictionary<int, InventoryRecord> collected,
         CancellationToken cancellationToken)
     {
         string? problem = null;
@@ -45,10 +41,12 @@ public sealed class InventoryCollector(
             try
             {
                 var page = await source.GetPageAsync(pageNumber, _options.PageSize, cancellationToken);
-                problem = Validate(page, pageNumber, reference ?? page, seenIds);
+                var newRecords = new Dictionary<int, InventoryRecord>();
+                problem = Validate(page, pageNumber, reference ?? page, collected, newRecords);
                 if (problem is null)
                 {
-                    seenIds.UnionWith(page.Records.Select(r => r.Id));
+                    foreach (var (id, record) in newRecords)
+                        collected.Add(id, record);
                     return page;
                 }
             }
@@ -66,7 +64,12 @@ public sealed class InventoryCollector(
             $"Inventory page {pageNumber} was not consistent after {_options.MaxPageAttempts} attempts: {problem}");
     }
 
-    private string? Validate(InventoryPage page, int pageNumber, InventoryPage reference, HashSet<int> seenIds)
+    private string? Validate(
+        InventoryPage page,
+        int pageNumber,
+        InventoryPage reference,
+        IReadOnlyDictionary<int, InventoryRecord> collected,
+        Dictionary<int, InventoryRecord> newRecords)
     {
         if (page.Page != pageNumber)
             return $"requested page {pageNumber} but received page {page.Page}";
@@ -80,20 +83,25 @@ public sealed class InventoryCollector(
         if (page.TotalRecords != reference.TotalRecords || page.TotalPages != reference.TotalPages)
             return "totals differ from the first page";
 
-        var expectedCount = Math.Clamp(page.TotalRecords - (pageNumber - 1) * page.PageSize, 0, page.PageSize);
-        if (page.Records.Count != expectedCount)
-            return $"expected {expectedCount} records but received {page.Records.Count}";
-
-        var pageIds = new HashSet<int>();
         foreach (var record in page.Records)
         {
             var recordProblem = ValidateRecord(record);
             if (recordProblem is not null)
                 return recordProblem;
 
-            if (!pageIds.Add(record.Id) || seenIds.Contains(record.Id))
-                return $"duplicate record id {record.Id}";
+            if (collected.TryGetValue(record.Id, out var existing) || newRecords.TryGetValue(record.Id, out existing))
+            {
+                if (existing != record)
+                    return $"record {record.Id} appears more than once with different content";
+                continue;
+            }
+
+            newRecords.Add(record.Id, record);
         }
+
+        var expectedCount = Math.Clamp(page.TotalRecords - (pageNumber - 1) * page.PageSize, 0, page.PageSize);
+        if (newRecords.Count != expectedCount)
+            return $"expected {expectedCount} new records but received {newRecords.Count}";
 
         return null;
     }

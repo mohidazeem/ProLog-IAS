@@ -57,13 +57,19 @@ public class InventoryAggregatorTests
     }
 
     [Fact]
-    public void Aggregate_GroupsCategoriesIgnoringCaseAndSurroundingWhitespace()
+    public void Aggregate_GroupsCategoriesIgnoringCaseAndWhitespace_UsingMostCommonSpelling()
     {
-        var report = _aggregator.Aggregate([Record(1, "Electronics"), Record(2, " electronics ")]);
+        var report = _aggregator.Aggregate(
+        [
+            Record(1, " electronics "),
+            Record(2, "Electronics"),
+            Record(3, "ELECTRONICS"),
+            Record(4, "Electronics ")
+        ]);
 
         var category = Assert.Single(report.Categories);
         Assert.Equal("Electronics", category.Category);
-        Assert.Equal(2, category.AvailableRecordCount);
+        Assert.Equal(4, category.AvailableRecordCount);
     }
 
     [Fact]

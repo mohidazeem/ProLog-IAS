@@ -22,10 +22,18 @@ public sealed class InventoryAggregator
         var mostRecent = items.OrderByDescending(r => r.LastUpdated).ThenBy(r => r.Id).First();
 
         return new CategorySummary(
-            group.Key,
+            MostCommonSpelling(items),
             items.Sum(r => r.Price * r.Quantity),
             items.Count,
             mostRecent,
             items);
     }
+
+    private static string MostCommonSpelling(IEnumerable<InventoryRecord> items) =>
+        items.Select(r => r.Category.Trim())
+            .GroupBy(name => name, StringComparer.Ordinal)
+            .OrderByDescending(g => g.Count())
+            .ThenBy(g => g.Key, StringComparer.Ordinal)
+            .First()
+            .Key;
 }
